@@ -1,0 +1,566 @@
+Program.Sub.ScreenSU.Start
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'Coded by: Melinda Keyes
+'Project Start Date: 9/12/2011
+'Quote: 2619
+'Hooks:
+'  11120 - Router Header Script 1
+'  11010 - Router Header Populate
+'  11090 - Router Header Pre-Save
+'  11092 - Router Header Post-Save
+'  11091 - Router Header Save Prompt
+'  16650 - Work Order Pre-OK
+'  34701 - Workflow Update
+'Notes:
+'  A GAB program will be created that will be hooked (000011120) to the script 1 button on the router header screen.
+'  When a new router is created, the user will click this button which will launch the program. This program will check to see if a workflow has already been created for this router,
+'  if not, the program will create a workflow from ATG_WF_ROUTER_SIGNOFF.WF template which will also be provided.
+'
+'  The router number and revision number should be included as the title and as metadata for the workflow.
+'  This template will have the ability to accommodate groups of up to 25 people. Any unused lines will automatically be marked as complete when the workflow is created.
+'  The program will assign one line of the workflow per member of the current RTR group. NOTE: THE PROGRAM WILL BE HARDCODED TO DRAW USERS FROM THIS GROUP (RTR).
+'  This group's membership may be changed at any point but will not alter any previously created workflows. Each person assigned a line of the workflow will be notified via innernet message (specified by user account).
+'
+'  The lines of the workflow will run in series (each line being dependent on the line before it).
+'  The order of users will be determined by a second GAB script which will run off the Group Security Maintenance Script 1 button (hook 33705).
+'  This program will show all current members of the RTR group and allow the user to number them in the desired order. This information will be saved to a custom table.
+'
+'  Each person who marks their line as complete will be considered as "signed off" on the completed router, the actual sign off field of the workflow is not necessary for this purpose.
+'  When all assigned lines of the workflow have been completed, there workflow will be marked as complete and the program will mark the router complete flag indicating that work orders for that router number may be created.
+'  The router complete flag will only be allowed to be checked by the completion of the workflow and members of the current RTR group.
+'
+'  A the first GAB program will also be hooked (000016650) to the pre-OK hook of the work order entry screen. When a user attempts to create a work order, the router number is checked against all open workflows.
+'  If a workflow is found with a matching number in its metadata, check to see if the workflow is complete. If there are still members of the RTR group who have not completed their workflow lines (not signed off on the router),
+'  override the save function of the work order entry and display a message "Work order entry prohibited. Router has not been signed off."
+
+F.Intrinsic.Control.SetErrorHandler("Main_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+
+F.ODBC.Connection!conX.OpenConnection(V.Ambient.PDSN,V.Ambient.PUser,V.Ambient.PPass)
+
+F.Intrinsic.Control.If(V.Caller.Hook,=,11010)
+	V.Passed.000201.Set("Get Approved")
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.If(V.Caller.Hook,=,11091)
+	F.Intrinsic.Control.CallSub(Check_router_complete_flag)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.If(V.Caller.Hook,=,11090)
+	F.Intrinsic.Control.CallSub(Check_router_complete_flag)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.If(V.Caller.Hook,=,11092)
+	F.Intrinsic.Control.CallSub(Check_router_complete_flag)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.If(V.Caller.Hook,=,11120)
+	F.Intrinsic.Control.CallSub(New_wf)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.If(V.Caller.Hook,=,16650)
+	F.Intrinsic.Control.CallSub(Check_wf_completion)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.If(V.Caller.Hook,=,34701)
+	F.Intrinsic.Control.CallSub(Mark_complete)
+F.Intrinsic.Control.EndIf
+
+F.ODBC.Connection!conX.Close
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("Main_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: ATG_WF_ROUTER_SIGNOFF.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.End
+Function.Intrinsic.Control.EndIf
+
+Program.Sub.Main.End
+
+Program.Sub.Check_WF_Completion.Start
+F.Intrinsic.Control.SetErrorHandler("Check_WF_Completion_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.sQuery.Declare(String)
+V.Local.sRouterNo.Declare(String)
+V.Local.sRouterRev.Declare(String)
+V.Local.sTitle.Declare(String)
+V.Local.sLine.Declare(String)
+V.Local.sTemp.Declare(String)
+V.Local.iWF.Declare(Long)
+V.Local.iC.Declare(Long)
+V.Local.bComplete.Declare(Boolean,True)
+V.Local.bInGroup.Declare(Boolean)
+
+'if trying to create a part based on part number, disreguard checks
+V.Local.sRouterNo.Set(V.Passed.000006)
+F.Intrinsic.String.Trim(V.Local.sRouterNo,V.Local.sTemp)
+F.Intrinsic.Control.If(V.Local.sTemp,=,"")
+	F.Intrinsic.Control.ExitSub
+F.Intrinsic.Control.EndIf
+V.Local.sRouterRev.Set(V.Passed.000007)
+F.Intrinsic.String.Concat(V.Local.sRouterNo,"-",V.Local.sRouterRev,V.Local.sTitle)
+
+'check to see if the user is part of the current RTR group
+F.Global.Security.IsInGroup(V.Caller.User,"RTR",V.Caller.CompanyCode,V.Local.bInGroup)
+F.Intrinsic.Control.If(V.Local.bInGroup,=,True)
+	'If the user is part of the RTR group, disreguard all checks
+	F.Intrinsic.Control.ExitSub
+F.Intrinsic.Control.EndIf
+
+'make sure the router field is padded appropriately
+F.Intrinsic.Control.If(V.Local.sRouterRev.Trim,<>,"")
+	F.Intrinsic.String.RPad(V.Local.sRouterNo," ",17,V.Local.sRouterNo)
+	F.Intrinsic.String.Concat(V.Local.sRouterNo,V.Local.sRouterRev,V.Local.sRouterNo)
+F.Intrinsic.Control.EndIf
+
+'F.Intrinsic.UI.Msgbox(V.Local.sRouterNo)
+
+'the user is not part of the RTR group, see if the router has been marked as complete.
+F.Intrinsic.String.Concat("SELECT * FROM ROUTER_SUPP WHERE RTR_NUM = '",V.Local.sRouterNo,"'",V.Local.sQuery)
+F.ODBC.Connection!conX.OpenRecordsetRO("rstComplete",V.Local.sQuery)
+F.Intrinsic.Control.If(V.ODBC.conX!rstComplete.EOF,=,True)
+	F.Intrinsic.UI.Msgbox("Work order entry prohibited. Router is not complete.")
+	V.Passed.777777.Set(1)
+F.Intrinsic.Control.Else
+	F.Intrinsic.Control.If(V.ODBC.conX!rstComplete.FieldVal!COMPLETE,=,True)
+		'the router is ready to be placed in production
+		F.Intrinsic.Control.ExitSub
+	F.Intrinsic.Control.Else
+		F.Intrinsic.UI.Msgbox("Work order entry prohibited. Router is not complete.")
+		V.Passed.777777.Set(1)
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.EndIf
+
+''check to see if either the user is in the RTR group or the workflow is complete
+'F.Global.WorkFlow.GetIDFromTitle(V.Local.sTitle,V.Local.iWF)
+'F.Intrinsic.Control.If(V.Local.iWF,>,0)
+'	'workflow was found for this router, check to see if the workflow is complete
+'	F.Intrinsic.String.Concat("SELECT * FROM ATG_WF_LINES WHERE WF_ID = '",V.Local.iWF,"' ORDER BY LINE",V.Local.sQuery)
+'	F.ODBC.Connection!conX.OpenRecordsetRO("rstLines",V.Local.sQuery)
+'	F.Intrinsic.Control.If(V.ODBC.conX!rstLines.EOF,=,True)
+'		V.Local.bComplete.Set(False)
+'	F.Intrinsic.Control.EndIf
+'	F.Intrinsic.Control.DoUntil(V.ODBC.conX!rstLines.EOF,=,True)
+'		F.Intrinsic.Control.If(V.ODBC.conX!rstLines.FieldValLong!PERC_COMPLETION,<>,100)
+'			V.Local.bComplete.Set(False)
+'		F.Intrinsic.Control.EndIf
+'		F.ODBC.conX!rstLines.MoveNext
+'	F.Intrinsic.Control.Loop
+'	F.ODBC.conX!rstLines.Close
+'
+'	F.Intrinsic.Control.If(V.Local.bComplete,=,False)
+'		F.Intrinsic.UI.Msgbox("Work order entry prohibited. Router has not been signed off.")
+'		V.Passed.777777.Set(1)
+'	F.Intrinsic.Control.EndIf
+'
+'F.Intrinsic.Control.Else
+'	F.Intrinsic.UI.Msgbox("No workflow has been created for this router. Overriding process.")
+'	V.Passed.777777.Set(1)
+'F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("Check_WF_Completion_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: ATG_WF_ROUTER_SIGNOFF.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	V.Passed.777777.Set(1)
+Function.Intrinsic.Control.EndIf
+
+Program.Sub.Check_WF_Completion.End
+
+Program.Sub.New_WF.Start
+F.Intrinsic.Control.SetErrorHandler("New_WF_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.iRet.Declare(Long)
+V.Local.iWF.Declare(Long)
+V.Local.iWFT.Declare(Long)
+V.Local.iGroup.Declare(Long)
+V.Local.dateDue.Declare(Date)
+V.Local.dateStart.Declare(Date)
+V.Local.stitle.Declare(String)
+V.Local.sQuery.Declare(String)
+V.Local.sRet.Declare(String)
+V.Local.slines.Declare(String)
+V.Local.sname.Declare(String)
+V.Local.sUser.Declare(String)
+V.Local.sMessage.Declare(String)
+V.Local.sRouterNo.Declare(String)
+V.Local.sRouterRev.Declare(String)
+V.Local.sDesc.Declare(String)
+
+V.Local.sRouterNo.Set(V.Passed.000014)
+V.Local.sRouterRev.Set(V.Passed.000015)
+
+F.Intrinsic.Control.If(V.Local.sRouterNo,<>,"")
+'F.Intrinsic.Control.AndIf(V.Local.sRouterRev,<>,"")
+
+	F.Intrinsic.String.Concat(V.Local.sRouterNo,"-",V.Local.sRouterRev,V.Local.sTitle)
+	V.Local.dateStart.Set(V.Ambient.Now)
+	F.Intrinsic.Date.DateAdd("D",14,V.Local.dateStart,V.Local.dateDue)
+	F.Intrinsic.String.Concat("Review and Signoff on Router ",V.Local.stitle,V.Local.sDesc)
+
+	'check if already saved
+	'search meta data fields for matching routher num and rev
+	F.Intrinsic.Debug.setla("Checking if WF already exists for order")
+	F.Intrinsic.String.Concat("SELECT WF_ID FROM ATG_WF_HEADER WHERE META_0 = 'ROUTER' AND REF_0 = '",V.Local.sRouterNo,"' AND META_1 = 'REV' AND REF_1 = '",V.Local.sRouterRev,"'",V.Local.sQuery)
+	F.ODBC.Connection!conx.OpenRecordsetRO("rst",V.Local.sQuery)
+	'if no existing workflow exists for the router, create a new one
+	F.Intrinsic.Control.If(V.ODBC.conx!rst.EOF,=,True)
+		F.Global.WorkFlow.GetTemplateIDFromTitle("Router Signoff",V.Local.iWFT)
+
+		F.Intrinsic.Control.If(V.Local.iWFT,=,-1)
+			F.Intrinsic.ui.msgbox("Work Flow Template (Router Signoff) Not Found")
+			F.Intrinsic.Control.End
+		F.Intrinsic.Control.EndIf
+
+		F.Global.workflow.CREATEFROMTEMPLATE(V.Local.iWFT,V.Local.sTitle,V.Ambient.Now,V.Local.dateDue,V.Caller.User,1,V.Local.iWF)
+		F.Intrinsic.Control.If(V.Local.iWF,>,0)
+			F.Intrinsic.debug.setLA("WorkFlow Created: ",V.Local.iWF)
+			'set the meta and reference data
+			F.Global.workflow.setMetadata(V.Local.iWF,1,0,"ROUTER")
+			F.Global.workflow.setreferencedata(V.Local.iWF,0,V.Local.sRouterNo)
+			F.Global.workflow.setMetadata(V.Local.iWF,1,1,"REV")
+			F.Global.workflow.setreferencedata(V.Local.iWF,1,V.Local.sRouterRev)
+
+			'change the line assignments to match the current RTR group
+			F.Intrinsic.String.Concat("SELECT * FROM ATG_WF_LINES WHERE WF_ID = '",V.Local.iWF,"' ORDER BY LINE",V.Local.sQuery)
+			F.ODBC.Connection!conX.OpenLocalRecordsetRW("rstLine",V.Local.sQuery)
+			F.ODBC.Connection!conX.getID("ATG_RTR_Group_Order","RTR_GRP",false,V.Local.iGroup)
+			F.Intrinsic.String.Concat("SELECT * FROM ATG_RTR_Group_Order WHERE RTR_GRP = '",V.Local.iGroup,"' ORDER BY PRIORITY",V.Local.sQuery)
+			F.ODBC.Connection!conX.OpenLocalRecordsetRO("rstGroup",V.Local.sQuery)
+			F.Intrinsic.Control.If(V.ODBC.conX!rstGroup.EOF,=,True)
+				'if there are no priorities set for members of the RTR group, exit out
+				F.Intrinsic.UI.Msgbox("A Router Group (RTR) must be created prior to creating approval workflows.")
+				F.Intrinsic.String.Concat("DELETE FROM ATG_WF_HEADER WHERE WF_ID = '",V.Local.iWF,"'",V.Local.sQuery)
+				F.ODBC.Connection!conX.Execute(V.Local.sQuery)
+				F.Intrinsic.String.Concat("DELETE FROM ATG_WF_LINES WHERE WF_ID = '",V.Local.iWF,"'",V.Local.sQuery)
+				F.ODBC.Connection!conX.Execute(V.Local.sQuery)
+				F.Intrinsic.Control.ExitSub
+			F.Intrinsic.Control.EndIf
+			F.Intrinsic.Control.DoUntil(V.ODBC.conX!rstGroup.EOF,=,True)
+				F.Intrinsic.Control.If(V.ODBC.conX!rstLine.EOF,<>,True)
+					F.ODBC.conX!rstLine.Set!DESCRIPTION(V.Local.sDesc)
+					F.ODBC.conX!rstLine.Set!USER_GROUP(V.ODBC.conX!rstGroup.FieldValTrim!USERNAME)
+					F.ODBC.conX!rstLine.Set!SIGNOFF_USER_GRP(V.ODBC.conX!rstGroup.FieldValTrim!USERNAME)
+					F.ODBC.conX!rstLine.Set!NOTIFY(1)
+					F.ODBC.conX!rstLine.Set!USR_GRP_FLAG(True)
+					F.ODBC.conX!rstLine.Update
+					F.ODBC.conX!rstLine.MoveNext
+				F.Intrinsic.Control.EndIf
+				F.ODBC.conX!rstGroup.MoveNext
+			F.Intrinsic.Control.Loop
+			F.ODBC.conX!rstGroup.Close
+
+			'For any additional lines that are not assigned, delete
+			F.Intrinsic.Control.DoUntil(V.ODBC.conX!rstLine.EOF,=,True)
+				F.ODBC.conX!rstLine.Set!NOTIFY(0)
+				F.ODBC.conX!rstLine.Update
+				F.ODBC.conX!rstLine.MoveNext
+			F.Intrinsic.Control.Loop
+			F.ODBC.conX!rstLine.Close
+
+			F.Intrinsic.String.Concat("DELETE FROM ATG_WF_LINES WHERE WF_ID = '",V.Local.iWF,"' AND NOTIFY = '0'",V.Local.sQuery)
+			F.ODBC.Connection!conX.Execute(V.Local.sQuery)
+
+			F.Intrinsic.debug.SetLA("Preparing Message")
+			F.Intrinsic.String.Concat("SELECT  NOTIFY, USER_GROUP, USR_GRP_FLAG FROM ATG_WF_LINES WHERE WF_ID = ",V.Local.iWF," AND NOTIFY= 1 ORDER BY LINE",V.Local.sQuery)
+			F.odbc.Connection!conx.OpenLocalrecordsetRO("rstWF",V.Local.squery)
+			F.Intrinsic.Control.DoUntil(V.odbc.conx!rstWF.EOF,=,True)
+				'notify users via innernet message
+				V.Local.sUser.Set(V.ODBC.conX!rstWF.FieldValTrim!USER_GROUP)
+				F.Intrinsic.String.Concat("Please review router number ",V.Local.stitle," and if approved, mark the queue item for this router as complete.",V.Local.sMessage)
+				F.Global.Messaging.CreateInternalMessage(V.Local.sUser,V.Local.sMessage)
+				F.ODBC.conx!rstWF.MoveNext
+			F.Intrinsic.Control.loop
+			F.ODBC.conx!rstWF.close
+
+			F.Intrinsic.UI.Msgbox("Approval workflow has been created for this router.")
+		F.Intrinsic.Control.Else
+			F.Intrinsic.Debug.SetLA("Error Creating Workflow")
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.Else
+		F.Intrinsic.UI.Msgbox("Approval workflow already exists for this router.")
+	F.Intrinsic.Control.EndIf
+	F.ODBC.conx!rst.Close
+
+F.Intrinsic.Control.Else
+	F.Intrinsic.Debug.SetLA("No router number/rev found.")
+	F.Intrinsic.UI.Msgbox("No router number/rev entered.")
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("New_WF_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: ATG_WF_ROUTER_SIGNOFF.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.String.Concat("DELETE FROM ATG_WF_HEADER WHERE WF_ID = '",V.Local.iWF,"'",V.Local.sQuery)
+	F.ODBC.Connection!conX.Execute(V.Local.sQuery)
+	F.Intrinsic.String.Concat("DELETE FROM ATG_WF_LINES WHERE WF_ID = '",V.Local.iWF,"'",V.Local.sQuery)
+	F.ODBC.Connection!conX.Execute(V.Local.sQuery)
+Function.Intrinsic.Control.EndIf
+
+Program.Sub.New_WF.End
+
+Program.Sub.Check_Router_Complete_Flag.Start
+'when trying to save a router, router complete flag may only be checked if the workflow is complete or the user is part of the RTR group
+F.Intrinsic.Control.SetErrorHandler("Check_Router_Complete_Flag_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.sUser.Declare(String)
+V.Local.sQuery.Declare(String)
+V.Local.sRouterNo.Declare(String)
+V.Local.sRouterRev.Declare(String)
+V.Local.sTitle.Declare(String)
+V.Local.sRTRNum.Declare(String)
+V.Local.iFlag.Declare(Long)
+V.Local.iWF.Declare(Long)
+V.Local.iGroup.Declare(Long)
+V.Local.bIncomplete.Declare(Boolean)
+V.Local.bInGroup.Declare(Boolean)
+V.Local.bPreviousEntry.Declare(Boolean)
+
+V.Local.bIncomplete.Set(False)
+V.Local.bInGroup.Set(False)
+V.Local.iFlag.set(V.Passed.000263)
+V.Local.sRouterNo.Set(V.Passed.000014)
+V.Local.sRouterRev.Set(V.Passed.000015)
+F.Intrinsic.String.Concat(V.Local.sRouterNo,"-",V.Local.sRouterRev,V.Local.sTitle)
+F.Intrinsic.String.RPad(V.Local.sRouterNo," ",17,V.Local.sRTRNum)
+F.Intrinsic.String.Concat(V.Local.sRTRNum,V.Local.sRouterRev,V.Local.sRTRNum)
+
+'check to see if the user is part of the current RTR group
+F.Global.Security.IsInGroup(V.Caller.User,"RTR",V.Caller.CompanyCode,V.Local.bInGroup)
+F.Intrinsic.Control.If(V.Local.bInGroup,=,True)
+	'If the user is part of the RTR group, disreguard all checks
+	F.Intrinsic.Control.ExitSub
+F.Intrinsic.Control.EndIf
+
+'check to see if the router was previously marked as complete
+F.Intrinsic.String.Concat("SELECT * FROM ROUTER_SUPP WHERE RTR_NUM = '",V.Local.sRTRNum,"'",V.Local.sQuery)
+F.ODBC.Connection!conX.OpenRecordsetRO("rstRtr",V.Local.sQuery)
+F.Intrinsic.Control.If(V.ODBC.conX!rstRtr.EOF,<>,True)
+	V.Local.bPreviousEntry.Set(V.ODBC.conX!rstRtr.FieldValTrim!COMPLETE)
+F.Intrinsic.Control.Else
+	V.Local.bPreviousEntry.Set(False)
+F.Intrinsic.Control.EndIf
+
+'check to see if the workflow exists for this router
+F.Global.WorkFlow.GetIDFromTitle(V.Local.sTitle,V.Local.iWF)
+F.Intrinsic.Control.If(V.Local.iWF,>,0)
+	'workflow was found for this router, check to see if the workflow is complete
+	F.Intrinsic.String.Concat("SELECT * FROM ATG_WF_LINES WHERE WF_ID = '",V.Local.iWF,"' ORDER BY LINE",V.Local.sQuery)
+	F.ODBC.Connection!conX.OpenRecordsetRO("rstLines",V.Local.sQuery)
+	F.Intrinsic.Control.If(V.ODBC.conX!rstLines.EOF,=,True)
+		V.Local.bIncomplete.Set(True)
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.DoUntil(V.ODBC.conX!rstLines.EOF,=,True)
+		F.Intrinsic.Control.If(V.ODBC.conX!rstLines.FieldValLong!PERC_COMPLETION,<>,100)
+			V.Local.bIncomplete.Set(True)
+		F.Intrinsic.Control.EndIf
+		F.ODBC.conX!rstLines.MoveNext
+	F.Intrinsic.Control.Loop
+	F.ODBC.conX!rstLines.Close
+F.Intrinsic.Control.Else
+	'no workflow exists, therefore incomplete
+	V.Local.bIncomplete.Set(True)
+F.Intrinsic.Control.EndIf
+
+'if the user is trying to check the router as complete
+F.Intrinsic.Control.If(V.Local.iFlag,=,1)
+	F.Intrinsic.Control.If(V.Local.bInGroup,=,False)
+		F.Intrinsic.Control.If(V.Local.bIncomplete,=,True)
+			F.Intrinsic.Control.If(V.Local.bPreviousEntry,=,False)
+				F.Intrinsic.UI.Msgbox("You are not authorized to mark this router as complete.")
+				V.Passed.000263.Set(0)
+				V.Passed.777777.Set(1)
+			F.Intrinsic.Control.EndIf
+		F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.EndIf
+'if the user is trying to check the router as not complete
+F.Intrinsic.Control.Else
+	'if the workflow has been completed for this router, mark as complete
+	F.Intrinsic.Control.If(V.Local.bIncomplete,=,False)
+		V.Passed.000263.Set(1)
+		F.Intrinsic.String.Concat("SELECT * FROM ROUTER_SUPP WHERE RTR_NUM = '",V.Local.sRTRNum,"'",V.Local.sQuery)
+		F.ODBC.Connection!conX.OpenRecordsetRW("rstCheck",V.Local.sQuery)
+		F.Intrinsic.Control.If(V.ODBC.conX!rstCheck.EOF,<>,True)
+			F.ODBC.conX!rstCheck.Set!COMPLETE(True)
+			F.ODBC.conX!rstCheck.Update
+		F.Intrinsic.Control.EndIf
+		F.ODBC.conX!rstCheck.Close
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.EndIf
+
+'F.Intrinsic.Control.If(V.Caller.Hook,=,11090)
+'	'if the box is checked, prohibit if not been checked previously, not in group, and workflow not complete
+'	F.Intrinsic.Control.If(V.Local.iFlag,=,1)
+'		F.Intrinsic.Control.If(V.Local.bPreviousEntry,=,False)
+'			F.Intrinsic.Control.If(V.Local.bInGroup,=,False)
+'				F.Intrinsic.Control.If(V.Local.bIncomplete,=,True)
+'					F.Intrinsic.UI.Msgbox("Router has not been approved. Marking as complete is prohibited.")
+'					V.Passed.000263.Set(0)
+'					V.Passed.777777.Set(1)
+'				F.Intrinsic.Control.EndIf
+'			F.Intrinsic.Control.Else
+'			'if the user is in the router group, they can set the router as complete
+'				V.Passed.000263.Set(1)
+'				F.Intrinsic.String.Concat("SELECT * FROM ROUTER_SUPP WHERE RTR_NUM = '",V.Local.sRTRNum,"'",V.Local.sQuery)
+'				F.ODBC.Connection!conX.OpenRecordsetRW("rstCheck",V.Local.sQuery)
+'				F.Intrinsic.Control.If(V.ODBC.conX!rstCheck.EOF,<>,True)
+'					F.ODBC.conX!rstCheck.Set!COMPLETE(True)
+'					F.ODBC.conX!rstCheck.Update
+'				F.Intrinsic.Control.EndIf
+'				F.ODBC.conX!rstCheck.Close
+'			F.Intrinsic.Control.EndIf
+'		F.Intrinsic.Control.EndIf
+'	F.Intrinsic.Control.Else
+'	'if box has not been checked but workflow is complete, go ahead and check router as complete
+'		F.Intrinsic.Control.If(V.Local.bIncomplete,=,False)
+'			V.Passed.000263.Set(1)
+'			F.Intrinsic.String.Concat("SELECT * FROM ROUTER_SUPP WHERE RTR_NUM = '",V.Local.sRTRNum,"'",V.Local.sQuery)
+'			F.ODBC.Connection!conX.OpenRecordsetRW("rstCheck",V.Local.sQuery)
+'			F.Intrinsic.Control.If(V.ODBC.conX!rstCheck.EOF,<>,True)
+'				F.ODBC.conX!rstCheck.Set!COMPLETE(True)
+'				F.ODBC.conX!rstCheck.Update
+'			F.Intrinsic.Control.EndIf
+'			F.ODBC.conX!rstCheck.Close
+'		F.Intrinsic.Control.EndIf
+'	F.Intrinsic.Control.EndIf
+'
+'F.Intrinsic.Control.ElseIf(V.Caller.Hook,=,11091)
+'	'if the box is checked, prohibit if not been checked previously, not in group, and workflow not complete
+'	F.Intrinsic.Control.If(V.Local.iFlag,=,1)
+'		F.Intrinsic.Control.If(V.Local.bPreviousEntry,=,False)
+'			F.Intrinsic.Control.If(V.Local.bInGroup,=,False)
+'				F.Intrinsic.Control.If(V.Local.bIncomplete,=,True)
+'					F.Intrinsic.UI.Msgbox("Router has not been approved. Marking as complete is prohibited.")
+'					V.Passed.000263.Set(0)
+'					V.Passed.777777.Set(1)
+'				F.Intrinsic.Control.EndIf
+'			F.Intrinsic.Control.Else
+'			'if the user is in the router group, they can set the router as complete
+'				V.Passed.000263.Set(1)
+'				F.Intrinsic.String.Concat("SELECT * FROM ROUTER_SUPP WHERE RTR_NUM = '",V.Local.sRTRNum,"'",V.Local.sQuery)
+'				F.ODBC.Connection!conX.OpenRecordsetRW("rstCheck",V.Local.sQuery)
+'				F.Intrinsic.Control.If(V.ODBC.conX!rstCheck.EOF,<>,True)
+'					F.ODBC.conX!rstCheck.Set!COMPLETE(True)
+'					F.ODBC.conX!rstCheck.Update
+'				F.Intrinsic.Control.EndIf
+'				F.ODBC.conX!rstCheck.Close
+'			F.Intrinsic.Control.EndIf
+'		F.Intrinsic.Control.EndIf
+'	F.Intrinsic.Control.Else
+'	'if box has not been checked but workflow is complete, go ahead and check router as complete
+'		F.Intrinsic.Control.If(V.Local.bIncomplete,=,False)
+'			V.Passed.000263.Set(1)
+'			F.Intrinsic.String.Concat("SELECT * FROM ROUTER_SUPP WHERE RTR_NUM = '",V.Local.sRTRNum,"'",V.Local.sQuery)
+'			F.ODBC.Connection!conX.OpenRecordsetRW("rstCheck",V.Local.sQuery)
+'			F.Intrinsic.Control.If(V.ODBC.conX!rstCheck.EOF,<>,True)
+'				F.ODBC.conX!rstCheck.Set!COMPLETE(True)
+'				F.ODBC.conX!rstCheck.Update
+'			F.Intrinsic.Control.EndIf
+'			F.ODBC.conX!rstCheck.Close
+'		F.Intrinsic.Control.EndIf
+'	F.Intrinsic.Control.EndIf
+'F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("Check_Router_Complete_Flag_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: ATG_WF_ROUTER_SIGNOFF.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	V.Passed.777777.Set(1)
+Function.Intrinsic.Control.EndIf
+
+Program.Sub.Check_Router_Complete_Flag.End
+
+Program.Sub.Mark_Complete.Start
+F.Intrinsic.Control.SetErrorHandler("Mark_Complete_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.sQuery.Declare(String)
+V.Local.sIDs.Declare(String)
+V.Local.sRTRNum.Declare(String)
+V.Local.iC.Declare(Long)
+V.Local.iLen.Declare(Long)
+V.Local.bIncomplete.Declare(Boolean)
+
+V.Local.sQuery.Set("SELECT Distinct WF_ID FROM ATG_WF_LINES ORDER BY WF_ID")
+F.ODBC.Connection!conX.OpenRecordsetRO("rst",V.Local.sQuery)
+F.Intrinsic.Control.If(V.ODBC.conX!rst.EOF,=,True)
+	F.Intrinsic.Control.ExitSub
+F.Intrinsic.Control.Else
+	V.Local.sIDs.Set(V.ODBC.conX!rst.FieldValTrim!WF_ID)
+	F.ODBC.conX!rst.MoveNext
+	F.Intrinsic.Control.DoUntil(V.ODBC.conX!rst.EOF,=,True)
+		F.Intrinsic.String.Concat(V.Local.sIDs,"*!*",V.ODBC.conX!rst.FieldValTrim!WF_ID,V.Local.sIDs)
+		F.ODBC.conX!rst.MoveNext
+	F.Intrinsic.Control.Loop
+F.Intrinsic.Control.EndIf
+F.ODBC.conX!rst.Close
+
+F.Intrinsic.String.Split(V.Local.sIDs,"*!*",V.Local.sIDs)
+
+F.Intrinsic.Control.For(V.Local.iC,0,V.Local.sIDs.UBound,1)
+	V.Local.bIncomplete.Set(False)
+	F.Intrinsic.String.Concat("SELECT * FROM ATG_WF_LINES WHERE WF_ID = '",V.Local.sIDs(V.Local.iC),"' ORDER BY LINE",V.Local.sQuery)
+	F.ODBC.Connection!conX.OpenRecordsetRO("rst",V.Local.sQuery)
+	F.Intrinsic.Control.If(V.ODBC.conX!rst.EOF,=,True)
+		V.Local.bIncomplete.Set(True)
+	F.Intrinsic.Control.EndIf
+	F.Intrinsic.Control.DoUntil(V.ODBC.conX!rst.EOF,=,True)
+		F.Intrinsic.Control.If(V.ODBC.conX!rst.FieldValLong!PERC_COMPLETION,<>,100)
+			V.Local.bIncomplete.Set(True)
+		F.Intrinsic.Control.EndIf
+		F.ODBC.conX!rst.MoveNext
+	F.Intrinsic.Control.Loop
+	F.ODBC.conX!rst.Close
+
+	F.Intrinsic.Control.If(V.Local.bIncomplete,=,False)
+	F.Intrinsic.String.Concat("SELECT DESCRIPTION FROM ATG_WF_LINES WHERE WF_ID = '",V.Local.sIDs(V.Local.iC),"' ORDER BY LINE",V.Local.sQuery)
+	F.ODBC.Connection!conX.OpenRecordsetRO("rst",V.Local.sQuery)
+		V.Local.sRTRNum.Set(V.ODBC.conX!rst.FieldValTrim!DESCRIPTION)
+		F.Intrinsic.String.Replace(V.Local.sRTRNum,"Review and Signoff on Router ","",V.Local.sRTRNum)
+		F.Intrinsic.String.Trim(V.Local.sRTRNum,V.Local.sRTRNum)
+		F.Intrinsic.String.Replace(V.Local.sRTRNum,"-","%",V.Local.sRTRNum)
+		F.Intrinsic.String.Concat("SELECT * FROM ROUTER_SUPP WHERE RTR_NUM LIKE '",V.Local.sRTRNum,"'",V.Local.sQuery)
+		F.ODBC.Connection!conX.OpenRecordsetRW("rstCheck",V.Local.sQuery)
+		F.Intrinsic.Control.If(V.ODBC.conX!rstCheck.EOF,<>,True)
+			F.ODBC.conX!rstCheck.Set!COMPLETE(True)
+			F.ODBC.conX!rstCheck.Update
+		F.Intrinsic.Control.EndIf
+		F.ODBC.conX!rstCheck.Close
+	F.ODBC.conX!rst.Close
+	F.Intrinsic.Control.EndIf
+F.Intrinsic.Control.Next(V.Local.iC)
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("Mark_Complete_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: ATG_WF_ROUTER_SIGNOFF.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+Function.Intrinsic.Control.EndIf
+
+Program.Sub.Mark_Complete.End
+
+
