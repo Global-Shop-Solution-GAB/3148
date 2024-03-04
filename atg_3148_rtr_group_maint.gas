@@ -1,0 +1,369 @@
+Program.Sub.ScreenSU.Start
+gui.F_RTR_GROUP..create
+gui.F_RTR_GROUP..caption("Router Group Maintenance")
+gui.F_RTR_GROUP..size(7005,4620)
+gui.F_RTR_GROUP..position(0,0)
+gui.F_RTR_GROUP..event(unload,f_rtr_group_unload)
+gui.F_RTR_GROUP..alwaysontop(False)
+gui.F_RTR_GROUP..fontname("Arial")
+gui.F_RTR_GROUP..fontsize(8)
+gui.F_RTR_GROUP..forecolor(0)
+gui.F_RTR_GROUP..fontstyle(,,,,)
+gui.F_RTR_GROUP..BackColor(-2147483633)
+gui.F_RTR_GROUP..controlbox(True)
+gui.F_RTR_GROUP..maxbutton(True)
+gui.F_RTR_GROUP..minbutton(True)
+gui.F_RTR_GROUP..mousepointer(0)
+gui.F_RTR_GROUP..moveable(True)
+gui.F_RTR_GROUP..sizeable(False)
+gui.F_RTR_GROUP..ShowInTaskBar(True)
+gui.F_RTR_GROUP..titlebar(True)
+gui.F_RTR_GROUP.gsfx_rtr.create(gsflexgrid)
+gui.F_RTR_GROUP.gsfx_rtr.FixedRows(0)
+gui.F_RTR_GROUP.gsfx_rtr.FixedCols(0)
+gui.F_RTR_GROUP.gsfx_rtr.visible(True)
+gui.F_RTR_GROUP.gsfx_rtr.size(6525,3315)
+gui.F_RTR_GROUP.gsfx_rtr.zorder(0)
+gui.F_RTR_GROUP.gsfx_rtr.position(200,200)
+gui.F_RTR_GROUP.gsfx_rtr.enabled(True)
+gui.F_RTR_GROUP.cmd_Save.create(button)
+gui.F_RTR_GROUP.cmd_Save.caption("Save")
+gui.F_RTR_GROUP.cmd_Save.visible(True)
+gui.F_RTR_GROUP.cmd_Save.size(1000,375)
+gui.F_RTR_GROUP.cmd_Save.zorder(0)
+gui.F_RTR_GROUP.cmd_Save.position(200,3600)
+gui.F_RTR_GROUP.cmd_Save.enabled(True)
+gui.F_RTR_GROUP.cmd_Save.fontname("Arial")
+gui.F_RTR_GROUP.cmd_Save.fontsize(8)
+gui.F_RTR_GROUP.cmd_Save.event(click,cmd_save_click)
+gui.F_RTR_GROUP.cmd_Up.create(button)
+gui.F_RTR_GROUP.cmd_Up.caption("/\")
+gui.F_RTR_GROUP.cmd_Up.visible(True)
+gui.F_RTR_GROUP.cmd_Up.size(300,250)
+gui.F_RTR_GROUP.cmd_Up.zorder(0)
+gui.F_RTR_GROUP.cmd_Up.position(6400,3550)
+gui.F_RTR_GROUP.cmd_Up.enabled(True)
+gui.F_RTR_GROUP.cmd_Up.fontname("Arial")
+gui.F_RTR_GROUP.cmd_Up.fontsize(8)
+gui.F_RTR_GROUP.cmd_Up.event(click,cmd_up_click)
+gui.F_RTR_GROUP.cmd_Down.create(button)
+gui.F_RTR_GROUP.cmd_Down.caption("V")
+gui.F_RTR_GROUP.cmd_Down.visible(True)
+gui.F_RTR_GROUP.cmd_Down.size(300,250)
+gui.F_RTR_GROUP.cmd_Down.zorder(0)
+gui.F_RTR_GROUP.cmd_Down.position(6400,3850)
+gui.F_RTR_GROUP.cmd_Down.enabled(True)
+gui.F_RTR_GROUP.cmd_Down.fontname("Arial")
+gui.F_RTR_GROUP.cmd_Down.fontsize(8)
+gui.F_RTR_GROUP.cmd_Down.event(click,cmd_down_click)
+gui.F_RTR_GROUP.lbl_user_order.create(label,"Change User Order (Up/Down)",True,1425,450,1,4805,3570,True,0,Arial,8,-2147483633,0)
+
+
+Program.Sub.ScreenSU.End
+
+Program.Sub.Preflight.Start
+
+Program.Sub.Preflight.End
+
+Program.Sub.Main.Start
+'Coded by: Melinda Keyes
+'Project Start Date: 9/12/2011
+'Quote: 2619
+'Hooks:
+'  33704 - Group Security Maint Entry
+'  33705 - Group Security Maint Script 1
+'Notes:
+'  A GAB program will be created that will be hooked (000011120) to the script 1 button on the router header screen.
+'  When a new router is created, the user will click this button which will launch the program. This program will check to see if a workflow has already been created for this router,
+'  if not, the program will create a workflow from ATG_WF_ROUTER_SIGNOFF.WF template which will also be provided.
+'
+'  The router number and revision number should be included as the title and as metadata for the workflow.
+'  This template will have the ability to accommodate groups of up to 25 people. Any unused lines will automatically be marked as complete when the workflow is created.
+'  The program will assign one line of the workflow per member of the current RTR group. NOTE: THE PROGRAM WILL BE HARDCODED TO DRAW USERS FROM THIS GROUP (RTR).
+'  This group's membership may be changed at any point but will not alter any previously created workflows. Each person assigned a line of the workflow will be notified via innernet message (specified by user account).
+'
+'  The lines of the workflow will run in series (each line being dependent on the line before it).
+'  The order of users will be determined by a second GAB script which will run off the Group Security Maintenance Script 1 button (hook 33705).
+'  This program will show all current members of the RTR group and allow the user to number them in the desired order. This information will be saved to a custom table.
+'
+'  Each person who marks their line as complete will be considered as "signed off" on the completed router, the actual sign off field of the workflow is not necessary for this purpose.
+'  When all assigned lines of the workflow have been completed, there workflow will be marked as complete and the program will mark the router complete flag indicating that work orders for that router number may be created.
+'  The router complete flag will only be allowed to be checked by the completion of the workflow and members of the current RTR group.
+'
+'  A the first GAB program will also be hooked (000016650) to the pre-OK hook of the work order entry screen. When a user attempts to create a work order, the router number is checked against all open workflows.
+'  If a workflow is found with a matching number in its metadata, check to see if the workflow is complete. If there are still members of the RTR group who have not completed their workflow lines (not signed off on the router),
+'  override the save function of the work order entry and display a message "Work order entry prohibited. Router has not been signed off."
+
+F.Intrinsic.Control.SetErrorHandler("Main_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.sQuery.Declare(String)
+V.Local.sUserIDs.Declare(String)
+V.Local.iID.Declare(Long)
+V.Local.sEmail.Declare(String)
+V.Local.sName.Declare(String)
+V.Local.sRet.Declare(String)
+V.Local.iGroupID.Declare(Long)
+V.Local.iCounter.Declare(Long)
+V.Local.iC.Declare(Long)
+V.Local.iRows.Declare(Long)
+
+F.Intrinsic.Control.If(V.Caller.Hook,=,33704)
+	V.Passed.Group-cmdGAB-0.Set("RTR Order")
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.If(V.Caller.Hook,=,33705)
+
+	F.ODBC.Connection!conX.OpenConnection(V.Ambient.PDSN,V.Ambient.PUser,V.Ambient.PPass)
+
+	F.Global.Security.GetGroupMembers("RTR",V.Caller.CompanyCode,V.Local.sUserIDs)
+
+	F.Intrinsic.Control.If(V.Local.sUserIDs.Trim,<>,"")
+		F.Intrinsic.String.Split(V.Local.sUserIDs,"*!*",V.Local.sUserIDs)
+
+		F.Intrinsic.Math.Add(V.Local.sUserIDs.UBound,2,V.Local.iRows)
+		Gui.F_RTR_GROUP.gsfx_rtr.Rows(V.Local.iRows)
+		Gui.F_RTR_GROUP.gsfx_rtr.Cols(4)
+
+		F.Intrinsic.Control.For(V.Local.iCounter,0,3,1)
+			Gui.F_RTR_GROUP.gsfx_rtr.BuildStyle(1,V.Local.iCounter,"Format","Alignment",4)
+			Gui.F_RTR_GROUP.gsfx_rtr.BuildStyle(1,V.Local.iCounter,"Type","Locked",True)
+			Gui.F_RTR_GROUP.gsfx_rtr.BuildStyle(2,V.Local.iCounter,"Format","Alignment",2)
+			Gui.F_RTR_GROUP.gsfx_rtr.BuildStyle(2,V.Local.iCounter,"Type","Locked",True)
+		F.Intrinsic.Control.Next(V.Local.iCounter)
+
+		Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(0,0,"User ID")
+		Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(1,0,"User Name")
+		Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(2,0,"Full Name")
+		Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(3,0,"Email")
+		Gui.F_RTR_GROUP.gsfx_rtr.ApplyStyle(0,1)
+
+		F.Intrinsic.Math.Sub(V.Local.iRows,1,V.Local.iRows)
+		F.Intrinsic.Control.For(V.Local.iCounter,1,V.Local.iRows,1)
+			F.Intrinsic.Math.Sub(V.Local.iCounter,1,V.Local.iC)
+			F.Global.Security.GetFullName(V.Local.sUserIDs(V.Local.iC),V.Caller.CompanyCode,V.Local.sName)
+			F.Global.Security.GetUserEmail(V.Local.sUserIDs(V.Local.iC),V.Caller.CompanyCode,V.Local.sEmail)
+			F.Global.Security.GetUserID(V.Local.sUserIDs(V.Local.iC),V.Caller.CompanyCode,V.Local.iID)
+			Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(0,V.Local.iCounter,V.Local.iID)
+			Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(1,V.Local.iCounter,V.Local.sUserIDs(V.Local.iC))
+			Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(2,V.Local.iCounter,V.Local.sName)
+			Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(3,V.Local.iCounter,V.Local.sEmail)
+			Gui.F_RTR_GROUP.gsfx_rtr.ApplyStyle(V.Local.iCounter,2)
+		F.Intrinsic.Control.Next(V.Local.iCounter)
+
+		Gui.F_RTR_GROUP.gsfx_rtr.FixedRows(1)
+		Gui.F_RTR_GROUP.gsfx_rtr.SetColumnPercentages(".10:.20:.30:.40")
+		Gui.F_RTR_GROUP..Show
+
+	F.Intrinsic.Control.Else
+		F.Intrinsic.UI.Msgbox("Please create a group with ID: RTR")
+		F.Intrinsic.Control.End
+	F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.Else
+	F.Intrinsic.Control.End
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("Main_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: ATG_RTR_GROUP_MAINT.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.ODBC.Connection!conX.CloseRecordsets
+	F.Intrinsic.Control.End
+Function.Intrinsic.Control.EndIf
+
+Program.Sub.Main.End
+
+program.sub.f_rtr_group_unload.start
+F.Intrinsic.Control.SetErrorHandler("f_rtr_group_unload_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+
+F.ODBC.Connection!conX.Close
+F.Intrinsic.Control.End
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("f_rtr_group_unload_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: ATG_RTR_GROUP_MAINT.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+	F.Intrinsic.Control.End
+Function.Intrinsic.Control.EndIf
+
+program.sub.f_rtr_group_unload.end
+
+program.sub.cmd_save_click.start
+F.Intrinsic.Control.SetErrorHandler("cmd_save_click_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.sQuery.Declare(String)
+V.Local.sUID.Declare(String)
+V.Local.sUsername.Declare(String)
+V.Local.sName.Declare(String)
+V.Local.sEmail.Declare(String)
+V.Local.iPriority.Declare(Long)
+V.Local.iGroup.Declare(Long)
+V.Local.iRows.Declare(Long)
+V.Local.iC.Declare(Long)
+
+V.Local.iRows.Set(V.Screen.F_RTR_GROUP!gsfx_rtr.Rows)
+F.Intrinsic.Math.Sub(V.Local.iRows,1,V.Local.iRows)
+
+F.ODBC.Connection!conX.Execute("DELETE FROM ATG_RTR_Group_Order")
+
+F.ODBC.Connection!conX.GetID("ATG_RTR_Group_Order","RTR_GRP",true,V.Local.iGroup)
+F.ODBC.Connection!conX.OpenRecordsetRW("rstOrder","ATG_RTR_Group_Order")
+	F.Intrinsic.Control.For(V.Local.iC,1,V.Local.iRows,1)
+		Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(0,V.Local.iC,V.Local.sUID)
+		Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(1,V.Local.iC,V.Local.sUsername)
+		Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(2,V.Local.iC,V.Local.sName)
+		Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(3,V.Local.iC,V.Local.sEmail)
+		V.Local.iPriority.Set(V.Local.iC)
+		
+		F.ODBC.conX!rstOrder.AddNew
+		F.ODBC.conX!rstOrder.Set!RTR_GRP(V.Local.iGroup)
+		F.ODBC.conX!rstOrder.Set!USER_ID(V.Local.sUID)
+		F.ODBC.conX!rstOrder.Set!USERNAME(V.Local.sUsername)
+		F.ODBC.conX!rstOrder.Set!PRIORITY(V.Local.iPriority)
+		F.ODBC.conX!rstOrder.Set!DATE_LSTCHG(V.Ambient.Now)
+		F.ODBC.conX!rstOrder.Set!COMPANY(V.Caller.CompanyCode)
+		F.ODBC.conX!rstOrder.Update
+
+	F.Intrinsic.Control.Next(V.Local.iC)
+F.ODBC.conX!rstOrder.Close
+
+F.Intrinsic.UI.Msgbox("Order saved.")
+F.Intrinsic.Control.CallSub(F_rtr_group_unload)
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("cmd_save_click_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: ATG_RTR_GROUP_MAINT.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+Function.Intrinsic.Control.EndIf
+
+program.sub.cmd_save_click.end
+
+program.sub.cmd_up_click.start
+F.Intrinsic.Control.SetErrorHandler("cmd_up_click_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+
+V.Local.sUID.Declare(String)
+V.Local.sUsername.Declare(String)
+V.Local.sName.Declare(String)
+V.Local.sEmail.Declare(String)
+V.Local.sUID_C.Declare(String)
+V.Local.sUsername_C.Declare(String)
+V.Local.sName_C.Declare(String)
+V.Local.sEmail_C.Declare(String)
+
+V.Local.iCurrentRow.Declare(Long)
+V.Local.iUpperRow.Declare(Long)
+V.Local.iTopRow.Declare(Long)
+
+V.Local.iCurrentRow.Set(V.Screen.F_RTR_GROUP!gsfx_rtr.Row)
+F.Intrinsic.Math.Sub(V.Local.iCurrentRow,1,V.Local.iUpperRow)
+V.Local.iTopRow.Set(0)
+
+F.Intrinsic.Control.If(V.Local.iUpperRow,<>,V.Local.iTopRow)
+	Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(0,V.Local.iUpperRow,V.Local.sUID)
+	Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(1,V.Local.iUpperRow,V.Local.sUsername)
+	Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(2,V.Local.iUpperRow,V.Local.sName)
+	Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(3,V.Local.iUpperRow,V.Local.sEmail)
+
+	Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(0,V.local.iCurrentRow,V.local.suid_C)
+	Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(1,V.Local.iCurrentRow,V.Local.sUsername_C)
+	Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(2,V.Local.iCurrentRow,V.Local.sName_C)
+	Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(3,V.Local.iCurrentRow,V.Local.sEmail_C)
+
+	Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(0,V.Local.iUpperRow,V.Local.sUID_C)
+	Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(1,V.Local.iUpperRow,V.Local.sUsername_C)
+	Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(2,V.Local.iUpperRow,V.Local.sName_C)
+	Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(3,V.Local.iUpperRow,V.Local.sEmail_C)
+
+	Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(0,V.Local.iCurrentRow,V.Local.sUID)
+	Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(1,V.Local.iCurrentRow,V.Local.sUsername)
+	Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(2,V.Local.iCurrentRow,V.Local.sName)
+	Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(3,V.Local.iCurrentRow,V.Local.sEmail)
+
+	Gui.F_RTR_GROUP.gsfx_rtr.SetActiveCell(0,V.Local.iUpperRow)
+F.Intrinsic.Control.EndIf
+
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("cmd_up_click_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: ATG_RTR_GROUP_MAINT.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+Function.Intrinsic.Control.EndIf
+
+program.sub.cmd_up_click.end
+
+program.sub.cmd_down_click.start
+F.Intrinsic.Control.SetErrorHandler("cmd_down_click_Err")
+F.Intrinsic.Control.ClearErrors
+
+V.Local.sError.Declare(String)
+V.Local.sUID.Declare(String)
+V.Local.sUsername.Declare(String)
+V.Local.sName.Declare(String)
+V.Local.sEmail.Declare(String)
+V.Local.sUID_C.Declare(String)
+V.Local.sUsername_C.Declare(String)
+V.Local.sName_C.Declare(String)
+V.Local.sEmail_C.Declare(String)
+
+V.Local.iCurrentRow.Declare(Long)
+V.Local.iLowerRow.Declare(Long)
+V.Local.iLastRow.Declare(Long)
+
+V.Local.iCurrentRow.Set(V.Screen.F_RTR_GROUP!gsfx_rtr.Row)
+F.Intrinsic.Math.Add(V.Local.iCurrentRow,1,V.Local.iLowerRow)
+F.Intrinsic.Math.Sub(V.Screen.F_RTR_GROUP!gsfx_rtr.Rows,1,V.Local.iLastRow)
+
+F.Intrinsic.Control.If(V.Local.iCurrentRow,<>,V.Local.iLastRow)
+	Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(0,V.Local.iLowerRow,V.Local.sUID)
+	Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(1,V.Local.iLowerRow,V.Local.sUsername)
+	Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(2,V.Local.iLowerRow,V.Local.sName)
+	Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(3,V.Local.iLowerRow,V.Local.sEmail)
+
+	Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(0,V.local.iCurrentRow,V.local.suid_C)
+	Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(1,V.Local.iCurrentRow,V.Local.sUsername_C)
+	Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(2,V.Local.iCurrentRow,V.Local.sName_C)
+	Gui.F_RTR_GROUP.gsfx_rtr.GetTextMatrix(3,V.Local.iCurrentRow,V.Local.sEmail_C)
+
+	Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(0,V.Local.iLowerRow,V.Local.sUID_C)
+	Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(1,V.Local.iLowerRow,V.Local.sUsername_C)
+	Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(2,V.Local.iLowerRow,V.Local.sName_C)
+	Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(3,V.Local.iLowerRow,V.Local.sEmail_C)
+
+	Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(0,V.Local.iCurrentRow,V.Local.sUID)
+	Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(1,V.Local.iCurrentRow,V.Local.sUsername)
+	Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(2,V.Local.iCurrentRow,V.Local.sName)
+	Gui.F_RTR_GROUP.gsfx_rtr.TextMatrix(3,V.Local.iCurrentRow,V.Local.sEmail)
+
+	Gui.F_RTR_GROUP.gsfx_rtr.SetActiveCell(0,V.Local.iLowerRow)
+F.Intrinsic.Control.EndIf
+
+F.Intrinsic.Control.ExitSub
+
+F.Intrinsic.Control.Label("cmd_down_click_Err")
+F.Intrinsic.Control.If(V.Ambient.ErrorNumber,<>,0)
+	Function.Intrinsic.String.Concat("Project: ATG_RTR_GROUP_MAINT.gas",V.Ambient.Newline,V.Ambient.Newline,"Subroutine: ",V.Ambient.CurrentSubroutine,V.Ambient.NewLine,"Error Occurred ",V.Ambient.ErrorNumber," with description ",V.Ambient.ErrorDescription,V.Local.sError)
+	F.Intrinsic.UI.Msgbox(V.Local.sError)
+Function.Intrinsic.Control.EndIf
+
+program.sub.cmd_down_click.end
+
+
